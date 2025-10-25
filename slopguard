@@ -1,0 +1,20 @@
+#!/usr/bin/env ruby
+
+require_relative 'lib/slopguard'
+
+if ARGV.empty?
+  puts "Usage: slopguard <sbom.json> [--format json]"
+  exit 1
+end
+
+sbom_path = ARGV[0]
+format = ARGV.include?('--format') ? ARGV[ARGV.index('--format') + 1].to_sym : :text
+
+begin
+  results = SlopGuard.scan(sbom_path)
+  report = SlopGuard::Reporter.generate(results, format: format)
+  puts report
+
+  exit_code = results[:summary][:high_risk] > 0 ? 1 : 0
+  exit exit_code
+end
