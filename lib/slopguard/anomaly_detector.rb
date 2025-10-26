@@ -6,27 +6,127 @@ module SlopGuard
     end
 
     def detect(package, metadata, trust)
-      [
-        check_download_inflation(package, metadata),
-        check_namespace_squat(package, metadata),
-        check_ownership_change(package, metadata),
-        check_typosquat(package, metadata),
-        check_homoglyph(package[:name]),
-        check_suspicious_timing(metadata)
-      ].compact
+      timings = {}
+      all_anomalies = []
+      
+      checks = [
+        [:check_yanked, metadata],
+        [:check_missing_mfa, metadata],
+        [:check_version_spike, package, metadata],
+        [:check_download_inflation, package, metadata],
+        [:check_namespace_squat, package, metadata],
+        [:check_ownership_change, package, metadata],
+        [:check_typosquat, package, metadata],
+        [:check_homoglyph, package[:name]],
+        [:check_suspicious_timing, metadata]
+      ]
+      
+      checks.each do |check_data|
+        method_name = check_data[0]
+        args = check_data[1..-1]
+        
+        start = Time.now
+        result = send(method_name, *args)
+        elapsed = ((Time.now - start) * 1000).round(2)
+        timings[method_name] = elapsed
+        
+        puts "[PROFILE-ANOMALY] [#{Thread.current.object_id}] #{package[:name]} - #{method_name}: #{elapsed}ms" if ENV['PROFILE']
+        
+        all_anomalies << result if result
+      end
+      
+      if ENV['PROFILE']
+        total = timings.values.sum
+        puts "[PROFILE-ANOMALY] [#{Thread.current.object_id}] #{package[:name]} - ANOMALY TOTAL: #{total.round(2)}ms"
+        
+        # Show slowest checks
+        slowest = timings.sort_by { |k, v| -v }.first(3)
+        slowest.each do |method, time|
+          puts "[PROFILE-ANOMALY] [#{Thread.current.object_id}] #{package[:name]} - SLOW: #{method} = #{time}ms"
+        end
+      end
+      
+      all_anomalies.compact
     end
 
     private
 
-    def check_download_inflation(package, meta)
-      downloads = meta[:downloads].to_i
-      
-      # Skip check for packages with very high downloads (established packages)
-      return nil if downloads > 50_000_000
-      
+    def check_version_spike(package, metadata)  # Takes 2 args, not 1
       cache_key = "versions:#{package[:name]}"
       versions = @cache.get(cache_key, ttl: 604800)
       
+      return nil unless versions && versions.size > 5
+      
+      recent = versions.last(10).select { |v| v[:created_at] }
+      return nil if recent.size < 3
+      
+      timestamps = recent.map { |v| Time.parse(v[:created_at]) }
+      
+      one_day_ago = Time.now - 86400
+      recent_count = timestamps.count { |t| t > one_day_ago }
+      
+      if recent_count >= 5
+        return {
+          type: 'version_spike',
+          severity: 'HIGH',
+          penalty: -20,
+          confidence: 85,
+          evidence: "#{recent_count} versions published in last 24 hours"
+        }
+      end
+      
+      week_ago = Time.now - (7 * 86400)
+      week_count = timestamps.count { |t| t > week_ago }
+      
+      if week_count >= 10
+        {
+          type: 'rapid_versioning',
+          severity: 'MEDIUM',
+          penalty: -10,
+          confidence: 70,
+          evidence: "#{week_count} versions in 7 days"
+        }
+      end
+    end
+
+    def check_yanked(meta)
+      return nil unless meta[:yanked]
+      
+      {
+        type: 'yanked_package',
+        severity: 'CRITICAL',
+        penalty: -100,
+        confidence: 100,
+        evidence: "Package yanked (removed) from RubyGems"
+      }
+    end
+
+    def check_missing_mfa(meta)
+      downloads = meta[:downloads].to_i
+      has_mfa = meta.dig(:metadata, :rubygems_mfa_required) == 'true'
+      
+      # Only warn on mega-popular packages (>100M)
+      if downloads > 100_000_000 && !has_mfa
+        {
+          type: 'missing_mfa',
+          severity: 'LOW',
+          penalty: -2,
+          confidence: 40,
+          evidence: "Critical infrastructure without MFA protection"
+        }
+      end
+    end
+
+    def check_download_inflation(package, meta)
+      downloads = meta[:downloads].to_i
+      
+      return nil if downloads > 50_000_000
+      
+      # Try cache first - already fetched by trust scorer
+      cache_key = "versions:#{package[:name]}"
+      versions = @cache.get(cache_key, ttl: 604800)
+      
+      # If not cached, fetch (shouldn't happen often)
       unless versions
         data = @http.get("https://rubygems.org/api/v1/versions/#{package[:name]}.json")
         return nil unless data
@@ -41,13 +141,11 @@ module SlopGuard
       
       oldest = valid_versions.min_by { |v| Time.parse(v[:created_at]) }
       age_days = (Time.now - Time.parse(oldest[:created_at])) / 86400
-      return nil if age_days < 7  # Only check packages > 1 week old
+      return nil if age_days < 7
 
-      # More realistic baseline: 1000 downloads/day for legit packages
-      expected = age_days * 1000
-      ratio = downloads / [expected, 1].max
+      expected = age_days * 1000.0
+      ratio = (downloads.to_f / expected).round
 
-      # Only flag if ratio is extreme AND package is new
       if ratio > 100 && age_days < 30
         {
           type: 'download_inflation',
@@ -109,14 +207,36 @@ module SlopGuard
     end
 
     def check_typosquat(package, meta)
-      popular = @cache.get('popular:ruby', ttl: 604800)
-      unless popular
-        data = @http.get('https://rubygems.org/api/v1/downloads/top.json')
-        return nil unless data && data.is_a?(Array)
+      # Use class-level mutex for popular gems (shared across all detector instances)
+      @@popular_mutex ||= Mutex.new
+      
+      popular = @@popular_mutex.synchronize do
+        # Check cache inside mutex
+        cached = @cache.get('popular:ruby', ttl: 604800)
+        return cached if cached
         
-        popular = data.first(20).map { |p| { name: p[:name], downloads: p[:downloads] } }
-        @cache.set('popular:ruby', popular, ttl: 604800)
+        # Only ONE thread fetches, others wait here
+        puts "[PROFILE-TYPO] #{package[:name]} - Fetching popular gems (cache miss)..." if ENV['PROFILE']
+        t_start = Time.now
+        
+        # Just fetch top 3, not 7
+        known_popular = %w[rails rake bundler]
+        
+        result = known_popular.map do |name|
+          data = @http.get("https://rubygems.org/api/v1/gems/#{name}.json")
+          next unless data
+          { name: data[:name], downloads: data[:downloads] }
+        end.compact
+        
+        t_elapsed = ((Time.now - t_start) * 1000).round(2)
+        puts "[PROFILE-TYPO] #{package[:name]} - Fetched #{result.size} gems in #{t_elapsed}ms" if ENV['PROFILE']
+        
+        # Cache it
+        @cache.set('popular:ruby', result, ttl: 604800)
+        result
       end
+
+      return nil unless popular && popular.any?
 
       name = package[:name]
       current_dl = meta[:downloads].to_i

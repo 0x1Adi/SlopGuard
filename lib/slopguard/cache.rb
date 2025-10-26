@@ -3,35 +3,49 @@ module SlopGuard
     CACHE_DIR = File.expand_path('~/.slopguard/cache')
     METADATA_TTL = 86400
     TRUST_TTL = 604800
+    MAX_MEMORY_ENTRIES = 1000
 
     def initialize
       @memory = {}
-      FileUtils.mkdir_p(CACHE_DIR)
+      @mutex = Mutex.new
+      FileUtils.mkdir_p(CACHE_DIR, mode: 0700)
     end
 
     def get(key, ttl: METADATA_TTL)
-      if @memory[key] && fresh?(@memory[key][:ts], ttl)
-        return @memory[key][:val]
-      end
-
-      disk_path = key_path(key)
-      if File.exist?(disk_path)
-        data = JSON.parse(File.read(disk_path), symbolize_names: true)
-        if fresh?(data[:ts], ttl)
-          @memory[key] = data
-          return data[:val]
+      @mutex.synchronize do
+        # Check memory first
+        if @memory[key] && fresh?(@memory[key][:ts], ttl)
+          return @memory[key][:val]
         end
+
+        # Check disk
+        disk_path = key_path(key)
+        if File.exist?(disk_path)
+          data = JSON.parse(File.read(disk_path), symbolize_names: true)
+          if fresh?(data[:ts], ttl)
+            # Load into memory
+            prune_memory if @memory.size >= MAX_MEMORY_ENTRIES
+            @memory[key] = data
+            return data[:val]
+          end
+        end
+        nil
       end
-      nil
     end
 
     def set(key, value, ttl: METADATA_TTL)
       data = { val: value, ts: Time.now.to_i, ttl: ttl }
-      @memory[key] = data
       
-      path = key_path(key)
-      FileUtils.mkdir_p(File.dirname(path))
-      File.write(path, JSON.generate(data))
+      @mutex.synchronize do
+        # Store in memory
+        prune_memory if @memory.size >= MAX_MEMORY_ENTRIES
+        @memory[key] = data
+        
+        # Write to disk
+        path = key_path(key)
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, JSON.generate(data))
+      end
     end
 
     private
@@ -41,8 +55,15 @@ module SlopGuard
     end
 
     def key_path(key)
-      hash = Digest::SHA256.hexdigest(key)
+      # Use Ruby's built-in hash for speed
+      hash = key.hash.abs.to_s(36)
       File.join(CACHE_DIR, hash[0..1], hash[2..3], hash)
+    end
+
+    def prune_memory
+      # Remove oldest 10% of entries
+      to_remove = (@memory.size * 0.1).to_i
+      @memory.keys.first(to_remove).each { |k| @memory.delete(k) }
     end
   end
 end

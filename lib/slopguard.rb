@@ -11,12 +11,22 @@ require_relative 'slopguard/http_client'
 require_relative 'slopguard/trust_scorer'
 require_relative 'slopguard/anomaly_detector'
 require_relative 'slopguard/scanner'
+require_relative 'slopguard/gitlab_reporter'
 require_relative 'slopguard/reporter'
 
 module SlopGuard
-  VERSION = '1.0.0'
+  @http_client = nil
+  @cache = nil
+  
+  def self.http_client
+    @http_client ||= HttpClient.new
+  end
+  
+  def self.cache
+    @cache ||= Cache.new
+  end
   
   def self.scan(sbom_path, options = {})
-    Scanner.new(sbom_path, options).run
+    Scanner.new(sbom_path, http: http_client, cache: cache).run
   end
 end
