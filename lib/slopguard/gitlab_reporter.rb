@@ -1,3 +1,6 @@
+require 'digest'
+require 'json'
+
 module SlopGuard
   class GitLabReporter
     VERSION = "15.0.0"
@@ -32,7 +35,7 @@ module SlopGuard
           vendor: {
             name: "SlopGuard"
           },
-          version: "0.1.0"
+          version: "1.0.0"
         },
         type: "dependency_scanning",
         start_time: @scan_start.utc.iso8601,
@@ -42,8 +45,8 @@ module SlopGuard
     end
     
     def build_vulnerabilities
-      @results[:packages]
-        .reject { |pkg| pkg[:status] == 'VERIFIED' }
+      @results[:results]
+        .reject { |pkg| pkg[:action] == 'VERIFIED' }
         .map { |pkg| build_vulnerability(pkg) }
     end
     
@@ -64,9 +67,9 @@ module SlopGuard
           file: File.basename(@sbom_path),
           dependency: {
             package: {
-              name: pkg[:package]
+              name: pkg[:package][:name]
             },
-            version: pkg[:version]
+            version: pkg[:package][:version]
           }
         },
         identifiers: build_identifiers(pkg),
@@ -75,8 +78,8 @@ module SlopGuard
     end
     
     def generate_uuid(pkg)
-      # Generate deterministic UUID from package name + version + status
-      data = "#{pkg[:package]}@#{pkg[:version]}:#{pkg[:status]}"
+      # Generate deterministic UUID from package name + version + action
+      data = "#{pkg[:package][:name]}@#{pkg[:package][:version]}:#{pkg[:action]}"
       digest = Digest::SHA256.hexdigest(data)
       
       # Convert to UUIDv5 format (8-4-4-4-12 hex format)
@@ -90,47 +93,43 @@ module SlopGuard
     end
     
     def build_name(pkg)
-      case pkg[:status]
-      when 'HALLUCINATED'
-        "AI-Hallucinated Package: #{pkg[:package]}"
-      when 'HIGH_RISK'
-        if pkg[:anomalies]&.any? { |a| a[:type] == 'typosquat' }
-          "Typosquatting Attack: #{pkg[:package]}"
-        elsif pkg[:anomalies]&.any? { |a| a[:type] == 'namespace_squat' }
-          "Namespace Squatting: #{pkg[:package]}"
-        elsif pkg[:anomalies]&.any? { |a| a[:type] == 'homoglyph_attack' }
-          "Homoglyph Attack: #{pkg[:package]}"
+      case pkg[:action]
+      when 'NOT_FOUND'
+        "AI-Hallucinated Package: #{pkg[:package][:name]}"
+      when 'BLOCK'
+        if pkg[:anomalies]&.any? { |a| a[:type] == 'namespace_squat' }
+          "Namespace Squatting: #{pkg[:package][:name]}"
         else
-          "High-Risk Package: #{pkg[:package]}"
+          "High-Risk Package: #{pkg[:package][:name]}"
         end
-      when 'SUSPICIOUS'
-        "Suspicious Package: #{pkg[:package]}"
+      when 'WARN'
+        "Suspicious Package: #{pkg[:package][:name]}"
       else
-        "Security Issue: #{pkg[:package]}"
+        "Security Issue: #{pkg[:package][:name]}"
       end
     end
     
     def build_message(pkg)
-      "#{build_name(pkg)} (trust score: #{pkg[:trust_score]}/100)"
+      "#{build_name(pkg)} (trust score: #{pkg[:trust][:score]}/100)"
     end
     
     def build_description(pkg)
       parts = []
       
       # Main issue description
-      case pkg[:status]
-      when 'HALLUCINATED'
-        parts << "This package does not exist in the RubyGems registry. It may have been suggested by an AI coding assistant (ChatGPT, Claude, Copilot) that hallucinated a non-existent package name. Installing this package will fail unless an attacker has registered it with malicious code (slopsquatting attack)."
-      when 'HIGH_RISK'
-        parts << "This package exhibits multiple high-risk security indicators including low trust score (#{pkg[:trust_score]}/100) and severe security warnings. It may be a malicious package designed for supply chain attacks."
-      when 'SUSPICIOUS'
-        parts << "This package has a low trust score (#{pkg[:trust_score]}/100) and exhibits suspicious patterns. While not definitively malicious, it requires manual security review before use."
+      case pkg[:action]
+      when 'NOT_FOUND'
+        parts << "This package does not exist in the #{pkg[:package][:ecosystem]} registry. It may have been suggested by an AI coding assistant (ChatGPT, Claude, Copilot) that hallucinated a non-existent package name."
+      when 'BLOCK'
+        parts << "This package has trust score #{pkg[:trust][:score]}/100 and exhibits high-risk security indicators. It may be a malicious package designed for supply chain attacks."
+      when 'WARN'
+        parts << "This package has trust score #{pkg[:trust][:score]}/100 and exhibits suspicious patterns."
       end
       
       # Add trust breakdown
-      if pkg[:breakdown]&.any?
+      if pkg[:trust][:breakdown]&.any?
         parts << "\n\nTrust Analysis:"
-        pkg[:breakdown].each do |signal|
+        pkg[:trust][:breakdown].each do |signal|
           parts << "- #{signal[:signal]}: #{signal[:points]} points (#{signal[:reason]})"
         end
       end
@@ -139,7 +138,7 @@ module SlopGuard
       if pkg[:anomalies]&.any?
         parts << "\n\nSecurity Warnings:"
         pkg[:anomalies].each do |anomaly|
-          parts << "- [#{anomaly[:severity]}] #{anomaly[:type]}: #{anomaly[:evidence]}"
+          parts << "- [#{anomaly[:severity]}] #{anomaly[:type]}: #{anomaly[:description]}"
         end
       end
       
@@ -147,140 +146,111 @@ module SlopGuard
     end
     
     def map_severity(pkg)
-      case pkg[:status]
-      when 'HALLUCINATED'
+      case pkg[:action]
+      when 'NOT_FOUND'
         'Critical'
-      when 'HIGH_RISK'
-        critical_anomalies = pkg[:anomalies]&.select { |a| a[:severity] == 'CRITICAL' }
+      when 'BLOCK'
+        critical_anomalies = pkg[:anomalies]&.select { |a| a[:severity] == 'HIGH' }
         critical_anomalies&.any? ? 'Critical' : 'High'
-      when 'SUSPICIOUS'
-        high_anomalies = pkg[:anomalies]&.select { |a| a[:severity] == 'HIGH' }
-        high_anomalies&.any? ? 'High' : 'Medium'
+      when 'WARN'
+        'Medium'
       else
         'Low'
       end
     end
     
     def build_solution(pkg)
-      case pkg[:status]
-      when 'HALLUCINATED'
-        "This package does not exist. Remove it from your dependencies immediately. Verify the correct package name with the framework documentation or search RubyGems.org directly. If you're using AI coding assistants, always verify suggested package names before installing."
-      when 'HIGH_RISK'
-        solutions = ["Remove this package immediately from your dependencies."]
-        
-        if pkg[:anomalies]&.any? { |a| a[:type] == 'typosquat' }
-          target = pkg[:anomalies].find { |a| a[:type] == 'typosquat' }
-          solutions << "This appears to be a typosquatting attack mimicking '#{target[:target_package]}'. Use the correct package name instead."
-        end
-        
-        if pkg[:anomalies]&.any? { |a| a[:type] == 'ownership_change' }
-          solutions << "The package maintainer recently changed. Review recent commits for malicious code before using."
-        end
-        
-        solutions << "Rotate any credentials that may have been exposed if this package was already installed."
-        solutions.join(" ")
-      when 'SUSPICIOUS'
-        "Conduct manual security review before using this package. Review the source code, check maintainer reputation, and verify the package serves its stated purpose. Consider using more established alternatives if available."
+      case pkg[:action]
+      when 'NOT_FOUND'
+        "Remove this package from your dependencies. Verify the correct package name with official documentation."
+      when 'BLOCK'
+        "Remove this package immediately. If needed, find alternatives with higher trust scores."
+      when 'WARN'
+        "Review this package manually. Check maintainer history, recent changes, and community reputation."
       else
-        "Review package security before use."
+        "Investigate this package before use."
       end
     end
     
     def build_identifiers(pkg)
       identifiers = []
       
-      # Primary identifier: SlopGuard internal tracking
-      identifiers << {
-        type: "slopguard",
-        name: "SLOPGUARD-#{pkg[:status]}-#{pkg[:package]}",
-        value: "#{pkg[:status]}-#{pkg[:package]}",
-        url: "https://github.com/aditya01933/slopguard##{pkg[:status].downcase}"
-      }
+      # Add package-specific identifier
+      ecosystem = pkg[:package][:ecosystem]
+      registry_url = case ecosystem
+                     when 'ruby'
+                       "https://rubygems.org/gems/#{pkg[:package][:name]}"
+                     when 'python'
+                       "https://pypi.org/project/#{pkg[:package][:name]}"
+                     else
+                       nil
+                     end
       
-      # Add CWE identifiers based on attack type
-      if pkg[:anomalies]
+      if registry_url && pkg[:action] != 'NOT_FOUND'
+        identifiers << {
+          type: "package",
+          name: pkg[:package][:name],
+          value: pkg[:package][:name],
+          url: registry_url
+        }
+      end
+      
+      # Add CWE identifiers based on anomaly types
+      if pkg[:anomalies]&.any?
         pkg[:anomalies].each do |anomaly|
-          cwe = map_anomaly_to_cwe(anomaly[:type])
+          cwe = case anomaly[:type]
+                when 'namespace_squat', 'typosquat'
+                  { id: 'CWE-1357', name: 'Dependency Confusion', url: 'https://cwe.mitre.org/data/definitions/1357.html' }
+                when 'download_inflation'
+                  { id: 'CWE-506', name: 'Embedded Malicious Code', url: 'https://cwe.mitre.org/data/definitions/506.html' }
+                else
+                  nil
+                end
+          
           if cwe
             identifiers << {
               type: "cwe",
-              name: "CWE-#{cwe[:id]}",
-              value: cwe[:id].to_s,
-              url: "https://cwe.mitre.org/data/definitions/#{cwe[:id]}.html"
+              name: cwe[:id],
+              value: cwe[:id],
+              url: cwe[:url]
             }
           end
         end
       end
       
-      # Ensure at least one identifier with valid URL
-      if identifiers.empty? || identifiers.all? { |i| i[:url].nil? || i[:url].empty? }
-        identifiers = [{
-          type: "slopguard",
-          name: "SLOPGUARD-SUPPLY-CHAIN",
-          value: "supply-chain-risk",
-          url: "https://github.com/aditya01933/slopguard"
-        }]
-      end
-      
-      identifiers
-    end
-    
-    def map_anomaly_to_cwe(anomaly_type)
-      # Map SlopGuard anomaly types to relevant CWE identifiers
-      case anomaly_type
-      when 'typosquat', 'namespace_squat', 'homoglyph_attack'
-        { id: 506, name: "Embedded Malicious Code" }
-      when 'download_inflation', 'suspicious_timing'
-        { id: 912, name: "Hidden Functionality" }
-      when 'ownership_change'
-        { id: 494, name: "Download of Code Without Integrity Check" }
-      when 'yanked_package'
-        { id: 1395, name: "Dependency on Vulnerable Third-Party Component" }
-      else
-        { id: 1357, name: "Reliance on Reverse DNS Resolution for a Security-Critical Action" }
-      end
+      identifiers.uniq { |i| i[:value] }
     end
     
     def build_links(pkg)
       links = []
       
-      # Add link to package on RubyGems (if it exists)
-      unless pkg[:status] == 'HALLUCINATED'
-        links << {
-          url: "https://rubygems.org/gems/#{pkg[:package]}"
-        }
+      # Add registry link if package exists
+      if pkg[:action] != 'NOT_FOUND'
+        ecosystem = pkg[:package][:ecosystem]
+        url = case ecosystem
+              when 'ruby'
+                "https://rubygems.org/gems/#{pkg[:package][:name]}"
+              when 'python'
+                "https://pypi.org/project/#{pkg[:package][:name]}"
+              end
+        
+        links << { url: url } if url
       end
       
-      # Add research links for attack types
-      if pkg[:anomalies]&.any? { |a| a[:type] == 'typosquat' }
-        links << {
-          url: "https://blog.sonatype.com/typosquatting-attacks-on-software-package-managers"
-        }
-      end
-      
-      if pkg[:status] == 'HALLUCINATED'
-        links << {
-          url: "https://arxiv.org/abs/2406.10279"  # AI hallucination research paper
-        }
-      end
+      # Add research links
+      links << { url: "https://github.com/aditya01933/SlopGuard" }
       
       links
     end
     
     def build_dependency_files
-      # Extract all scanned packages grouped by their source file
-      [{
-        path: File.basename(@sbom_path),
-        package_manager: "bundler",
-        dependencies: @results[:packages].map do |pkg|
-          {
-            package: {
-              name: pkg[:package]
-            },
-            version: pkg[:version]
-          }
-        end
-      }]
+      [
+        {
+          path: @sbom_path,
+          package_manager: "bundler",
+          dependencies: []
+        }
+      ]
     end
   end
 end

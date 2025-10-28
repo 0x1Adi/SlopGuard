@@ -1,26 +1,22 @@
 #!/usr/bin/env ruby
-
 require_relative 'lib/slopguard'
 
 if ARGV.empty?
-  puts "Usage: slopguard <sbom.json> [--format json|gitlab] [--allowlist file.txt] [--github-token TOKEN]"
+  puts "Usage: slopguard <sbom.json> [--format json|gitlab] [--output file]"
   puts ""
   puts "Options:"
   puts "  --format text        Human-readable output (default)"
   puts "  --format json        JSON output with internal structure"
   puts "  --format gitlab      GitLab security report JSON (v15.0.0)"
-  puts "  --allowlist FILE     Skip packages in allowlist file"
-  puts "  --github-token TOKEN GitHub personal access token (or set GITHUB_TOKEN env var)"
   puts "  --output FILE        Write report to file instead of stdout"
   puts ""
-  puts "GitHub Token:"
-  puts "  Unauthenticated: 60 requests/hour"
-  puts "  With token: 5000 requests/hour"
-  puts "  Create token at: https://github.com/settings/tokens (no scopes needed)"
+  puts "Supported ecosystems:"
+  puts "  - Ruby (RubyGems) - pkg:gem/"
+  puts "  - Python (PyPI) - pkg:pypi/"
   puts ""
   puts "Exit codes:"
-  puts "  0 = All packages verified"
-  puts "  1 = High-risk packages found"
+  puts "  0 = All packages verified or warnings only"
+  puts "  1 = High-risk or non-existent packages found"
   puts "  2 = Error occurred"
   exit 1
 end
@@ -32,34 +28,24 @@ if idx = ARGV.index('--format')
   options[:format] = ARGV[idx + 1]&.to_sym
 end
 
-if idx = ARGV.index('--allowlist')
-  options[:allowlist] = ARGV[idx + 1]
-end
-
-if idx = ARGV.index('--github-token')
-  options[:github_token] = ARGV[idx + 1]
-end
-
 if idx = ARGV.index('--output')
   options[:output] = ARGV[idx + 1]
 end
 
 begin
   start_time = Time.now
-  scanner = SlopGuard::Scanner.new(sbom_path, options)
-  results = scanner.run
+  results = SlopGuard.scan(sbom_path)
   elapsed = Time.now - start_time
   
-  # Show warning if rate limit was hit
-  if results[:summary][:warning]
-    STDERR.puts "\n⚠️  WARNING: #{results[:summary][:warning]}\n\n"
-  end
-  
-  report = SlopGuard::Reporter.generate(
-    results, 
-    sbom_path: results[:sbom_path],
-    format: options[:format] || :text
-  )
+  # Generate report based on format
+  report = case options[:format]
+           when :json
+             JSON.pretty_generate(results)
+           when :gitlab
+             SlopGuard::GitLabReporter.generate(results, sbom_path: sbom_path)
+           else
+             SlopGuard::Reporter.format_text(results)
+           end
   
   if options[:output]
     File.write(options[:output], report)
@@ -71,15 +57,10 @@ begin
   unless options[:format] == :json || options[:format] == :gitlab
     puts ""
     puts "Scan completed in #{elapsed.round(2)}s"
-    
-    if !options[:github_token] && !ENV['GITHUB_TOKEN']
-      puts ""
-      puts "💡 TIP: Set GITHUB_TOKEN for faster scanning (5000 req/hour vs 60 unauthenticated)"
-      puts "   export GITHUB_TOKEN=your_token_here"
-    end
   end
-
-  exit_code = results[:summary][:high_risk] > 0 ? 1 : 0
+  
+  # Exit code: 1 if high risk or not found packages, 0 otherwise
+  exit_code = (results[:high_risk] > 0 || results[:not_found] > 0) ? 1 : 0
   exit exit_code
   
 rescue => e

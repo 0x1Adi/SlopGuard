@@ -1,6 +1,6 @@
 Gem::Specification.new do |spec|
   spec.name          = "slopguard"
-  spec.version       = "0.1.0"
+  spec.version       = "0.2.0"
   spec.authors       = ["Aditya Tiwari"]
   spec.email         = ["adityatiwari01933@gmail.com"]
 

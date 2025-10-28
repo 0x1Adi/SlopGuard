@@ -17,8 +17,21 @@ module SlopGuard
     private
 
     def parse_purl(purl)
-      return nil unless purl =~ %r{^pkg:gem/([^@]+)@(.+)$}
-      { name: $1, version: $2, ecosystem: 'ruby' }
+      case purl
+      when %r{^pkg:gem/([^@]+)@(.+)$}
+        { name: $1, version: $2, ecosystem: 'ruby' }
+      when %r{^pkg:pypi/([^@]+)@(.+)$}
+        { name: $1, version: $2, ecosystem: 'python' }
+      when %r{^pkg:npm/([^@]+)@(.+)$}
+        # npm support placeholder - will skip until adapter implemented
+        nil
+      when %r{^pkg:cargo/([^@]+)@(.+)$}
+        # cargo support placeholder - will skip until adapter implemented
+        nil
+      else
+        # Unsupported ecosystem - skip silently
+        nil
+      end
     end
   end
 end
