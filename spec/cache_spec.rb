@@ -50,47 +50,82 @@ RSpec.describe SlopGuard::Cache do
     end
   end
   
-  describe 'memory and disk persistence' do
-    it 'stores to memory first' do
-      cache.set('mem-key', 'mem-value')
-      
-      # Should be in memory (fast retrieval)
-      expect(cache.get('mem-key')).to eq('mem-value')
-    end
-    
+  describe 'disk persistence' do
     it 'persists to disk' do
       cache.set('disk-key', 'disk-value')
       
-      # Create new cache instance (clears memory)
+      # Create new cache instance (simulates process restart)
       new_cache = described_class.new
       
       # Should retrieve from disk
       expect(new_cache.get('disk-key')).to eq('disk-value')
     end
     
-    it 'loads disk data into memory on access' do
-      cache.set('hybrid-key', 'hybrid-value')
+    it 'handles complex data structures' do
+      data = {
+        name: 'rails',
+        version: '7.0.0',
+        downloads: 100_000_000,
+        nested: {
+          array: [1, 2, 3],
+          hash: { key: 'value' }
+        }
+      }
       
+      cache.set('complex-key', data)
       new_cache = described_class.new
-      first_get = new_cache.get('hybrid-key')  # Loads from disk
-      second_get = new_cache.get('hybrid-key') # From memory
       
-      expect(first_get).to eq('hybrid-value')
-      expect(second_get).to eq('hybrid-value')
+      expect(new_cache.get('complex-key')).to eq(data)
     end
   end
   
-  describe 'memory pruning' do
-    it 'prunes oldest entries when exceeding MAX_MEMORY_ENTRIES' do
-      # Fill cache beyond limit
-      (described_class::MAX_MEMORY_ENTRIES + 100).times do |i|
-        cache.set("key-#{i}", "value-#{i}")
+  describe 'fetch pattern' do
+    it 'returns cached value if present' do
+      cache.set('fetch-key', 'cached-value')
+      
+      result = cache.fetch('fetch-key') do
+        'block-value'  # Should not execute
       end
       
-      # Early keys should be pruned from memory (but still on disk)
-      # This is probabilistic due to hash ordering, so check general behavior
-      memory_size = cache.instance_variable_get(:@memory).size
-      expect(memory_size).to be <= described_class::MAX_MEMORY_ENTRIES
+      expect(result).to eq('cached-value')
+    end
+    
+    it 'executes block and caches result if not present' do
+      call_count = 0
+      
+      result = cache.fetch('new-key') do
+        call_count += 1
+        'computed-value'
+      end
+      
+      expect(result).to eq('computed-value')
+      expect(call_count).to eq(1)
+      
+      # Second call should use cache
+      result2 = cache.fetch('new-key') do
+        call_count += 1
+        'should-not-execute'
+      end
+      
+      expect(result2).to eq('computed-value')
+      expect(call_count).to eq(1)  # Block not called again
+    end
+    
+    it 'respects TTL in fetch' do
+      result = cache.fetch('ttl-key', ttl: 1) do
+        'value'
+      end
+      
+      expect(result).to eq('value')
+      
+      sleep(2)
+      
+      # Should re-execute block after expiration
+      result2 = cache.fetch('ttl-key', ttl: 1) do
+        'new-value'
+      end
+      
+      expect(result2).to eq('new-value')
     end
   end
   
@@ -118,6 +153,8 @@ RSpec.describe SlopGuard::Cache do
       
       expect(results).to all(eq('shared-value'))
     end
+    
+    # REMOVED: Memory pruning test (no longer applicable with disk-only cache)
   end
   
   describe 'key collision handling' do
@@ -134,6 +171,34 @@ RSpec.describe SlopGuard::Cache do
       cache.set('overwrite', 'updated')
       
       expect(cache.get('overwrite')).to eq('updated')
+    end
+  end
+  
+  describe 'stats' do
+    it 'returns cache statistics' do
+      cache.set('key1', 'value1')
+      cache.set('key2', 'value2')
+      
+      stats = cache.stats
+      
+      expect(stats[:total]).to be >= 2
+      expect(stats[:valid]).to be >= 2
+      expect(stats[:expired]).to be >= 0.0
+      expect(stats[:size_mb]).to be >= 0.0
+    end
+  end
+  
+  describe 'clear' do
+    it 'removes all cached data' do
+      cache.set('key1', 'value1')
+      cache.set('key2', 'value2')
+      
+      expect(cache.get('key1')).to eq('value1')
+      
+      cache.clear
+      
+      expect(cache.get('key1')).to be_nil
+      expect(cache.get('key2')).to be_nil
     end
   end
 end

@@ -13,6 +13,7 @@ if ARGV.empty?
   puts "Supported ecosystems:"
   puts "  - Ruby (RubyGems) - pkg:gem/"
   puts "  - Python (PyPI) - pkg:pypi/"
+  puts "  - Go (Go Modules) - pkg:golang/"
   puts ""
   puts "Exit codes:"
   puts "  0 = All packages verified or warnings only"

@@ -2,6 +2,8 @@ require 'concurrent'
 
 module SlopGuard
   class Scanner
+    THREAD_POOL_SIZE = 3
+    
     def initialize(sbom_path, http:, cache:)
       @sbom_path = sbom_path
       @http = http
@@ -23,22 +25,35 @@ module SlopGuard
         }
       end
 
-      # Parallel processing with thread pool
-      pool = Concurrent::FixedThreadPool.new(10)
-      futures = packages.map do |pkg|
+      # FIXED: Filter out unsupported ecosystems BEFORE processing
+      supported_packages = packages.select do |pkg|
+        AdapterFactory.supported?(pkg[:ecosystem])
+      end
+      
+      # Log skipped packages for debugging
+      skipped = packages.size - supported_packages.size
+      if skipped > 0 && ENV['DEBUG']
+        puts "[INFO] Skipped #{skipped} packages from unsupported ecosystems"
+      end
+
+      # Parallel processing with reduced thread pool
+      pool = Concurrent::FixedThreadPool.new(THREAD_POOL_SIZE)
+      futures = supported_packages.map do |pkg|
         Concurrent::Future.execute(executor: pool) do
           begin
             process_package(pkg)
           rescue StandardError => e
-            # Handle any exceptions and return error result
-            puts "[ERROR] Failed to process #{pkg[:name]}: #{e.message}" if ENV['DEBUG']
-            puts e.backtrace.first(5).join("\n") if ENV['DEBUG']
+            # Handle exceptions gracefully with detailed error info
+            error_msg = "#{e.class}: #{e.message}"
+            $stderr.puts "[ERROR] Failed to process #{pkg[:name]}: #{error_msg}"
+            $stderr.puts e.backtrace.first(5).join("\n") if ENV['DEBUG']
+            
             {
               package: pkg,
               trust: { score: 0, level: 'ERROR', breakdown: [], stage: 0 },
               anomalies: [],
               action: 'WARN',
-              error: e.message
+              error: error_msg
             }
           end
         end
@@ -119,7 +134,7 @@ module SlopGuard
       
       has_high_severity = anomalies.any? { |a| a[:severity] == 'HIGH' }
       
-      if score >= 70  # Lowered from 80: GitHub stars shouldn't be required for VERIFIED
+      if score >= 70
         'VERIFIED'
       elsif score >= 60 || !has_high_severity
         'WARN'
