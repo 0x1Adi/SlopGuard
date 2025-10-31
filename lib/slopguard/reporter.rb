@@ -38,6 +38,18 @@ module SlopGuard
       lines << "⚠ Suspicious:       #{results[:suspicious]}"
       lines << "✗ High risk:        #{results[:high_risk]}"
       lines << "? Not found:        #{results[:not_found]}"
+      
+      # NEW: Add performance metrics if available
+      if results[:metrics]
+        m = results[:metrics]
+        lines << ""
+        lines << "PERFORMANCE:"
+        lines << "Scan duration:      #{m[:scan_duration]}s"
+        lines << "API calls:          #{m[:api_calls]}"
+        lines << "Cache hit rate:     #{m[:cache_hit_rate]}%"
+        lines << "Avg time/package:   #{m[:avg_time_per_package]}s"
+      end
+      
       lines << ""
 
       # Group by action
@@ -76,7 +88,7 @@ module SlopGuard
           end
           
           if r[:anomalies].any?
-            lines << "  ⚠️  Anomalies:"
+            lines << "  ⚠️ Anomalies:"
             r[:anomalies].each do |anomaly|
               lines << "    - [#{anomaly[:severity]}] #{anomaly[:type]}: #{anomaly[:description]}"
             end
@@ -129,9 +141,10 @@ module SlopGuard
       lines << "SUMMARY"
       lines << "=" * 80
       
-      if results[:high_risk] > 0 || results[:not_found] > 0
-        lines << "❌ FAILED: Found #{results[:high_risk]} high-risk and #{results[:not_found]} non-existent packages"
-        lines << "   Action required: Review and remove flagged packages"
+      if results[:high_risk] > 0
+        lines << "❌ FAILED: Found #{results[:high_risk]} high-risk packages"
+      elsif results[:not_found] > 0
+        lines << "⚠️  BLOCKED: Found #{results[:not_found]} hallucinated packages"
       elsif results[:suspicious] > 0
         lines << "⚠️  WARNING: Found #{results[:suspicious]} suspicious packages"
         lines << "   Action: Review warnings but safe to proceed"

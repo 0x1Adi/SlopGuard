@@ -8,8 +8,12 @@ module SlopGuard
     METADATA_TTL = 86400      # 24 hours
     TRUST_TTL = 604800        # 7 days
     
+    attr_reader :cache_hits, :cache_misses
+    
     def initialize
       @lock = Mutex.new
+      @cache_hits = 0      # NEW: Track hits
+      @cache_misses = 0    # NEW: Track misses
       FileUtils.mkdir_p(CACHE_DIR, mode: 0700)
     end
     
@@ -18,21 +22,27 @@ module SlopGuard
     def get(key, ttl: METADATA_TTL)
       path = cache_path(key)
       
-      return nil unless File.exist?(path)
+      unless File.exist?(path)
+        @cache_misses += 1  # NEW: Track miss
+        return nil
+      end
       
       begin
         data = JSON.parse(File.read(path), symbolize_names: true)
         
         # Check if expired
         if fresh?(data[:ts], ttl)
+          @cache_hits += 1  # NEW: Track hit
           data[:val]
         else
           # Delete expired entry
           File.delete(path) rescue nil
+          @cache_misses += 1  # NEW: Track miss
           nil
         end
       rescue JSON::ParserError, Errno::ENOENT
         # Corrupted or deleted file - return nil
+        @cache_misses += 1  # NEW: Track miss
         nil
       end
     end
@@ -84,10 +94,20 @@ module SlopGuard
       result
     end
     
+    # NEW: Calculate cache hit rate as percentage
+    def hit_rate
+      total = @cache_hits + @cache_misses
+      return 0.0 if total == 0
+      
+      (@cache_hits.to_f / total * 100).round(1)
+    end
+    
     # Clear entire cache (useful for testing)
     def clear
       FileUtils.rm_rf(CACHE_DIR)
       FileUtils.mkdir_p(CACHE_DIR, mode: 0700)
+      @cache_hits = 0
+      @cache_misses = 0
     end
     
     # Get cache statistics for monitoring
@@ -113,7 +133,8 @@ module SlopGuard
         total: total_files,
         valid: valid,
         expired: expired,
-        size_mb: (dir_size(CACHE_DIR) / 1024.0 / 1024.0).round(2)
+        size_mb: (dir_size(CACHE_DIR) / 1024.0 / 1024.0).round(2),
+        hit_rate: hit_rate  # NEW: Include hit rate in stats
       }
     end
     

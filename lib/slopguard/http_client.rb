@@ -9,10 +9,13 @@ module SlopGuard
     TIMEOUT = 30
     MAX_RETRIES = 3
 
+    attr_reader :api_call_count
+
     def initialize
       @tokens = BURST_SIZE
       @last_refill = Time.now
       @mutex = Mutex.new
+      @api_call_count = 0  # NEW: Track API calls
     end
 
     # Generic GET request with retry logic and rate limiting
@@ -22,6 +25,7 @@ module SlopGuard
       
       begin
         acquire_token
+        @api_call_count += 1  # NEW: Increment counter
         
         uri = URI(url)
         request = Net::HTTP::Get.new(uri)

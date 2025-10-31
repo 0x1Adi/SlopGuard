@@ -18,7 +18,7 @@ module SlopGuard
         # Check if standard library (skip APIs)
         if is_standard_library?(package_name)
           result = {
-            metadata: { is_stdlib: true },  # INSIDE metadata!
+            metadata: { is_stdlib: true },
             versions: []
           }
           @cache.set(cache_key, result, ttl: Cache::METADATA_TTL)
@@ -31,8 +31,14 @@ module SlopGuard
         
         return nil if !depsdev_data && versions.empty?
         
+        # Resolve GitHub URL for custom domains (stored as STRING)
+        github_url = resolve_github_url(package_name)
+        
         result = {
-          metadata: (depsdev_data || {}).merge(is_stdlib: false),  # INSIDE metadata!
+          metadata: (depsdev_data || {}).merge(
+            is_stdlib: false,
+            github_url: github_url  # STRING: "github.com/org/repo"
+          ),
           versions: versions
         }
         
@@ -52,15 +58,15 @@ module SlopGuard
         score = 0
         breakdown = []
 
-        # Dependent counts (20 points)
-        dependents_result = score_dependents(package_name, metadata)
-        score += dependents_result[:score]
-        breakdown.concat(dependents_result[:breakdown])
-
-        # GitHub stars (15 points) - use starsCount from projectData
+        # GitHub stars (20 points)
         stars_result = score_github_stars(metadata)
         score += stars_result[:score]
         breakdown.concat(stars_result[:breakdown])
+
+        # OpenSSF Scorecard (20 points)
+        scorecard_result = score_scorecard(metadata)
+        score += scorecard_result[:score]
+        breakdown.concat(scorecard_result[:breakdown])
 
         # Age (10 points)
         age_result = score_age(versions, max_points: 10)
@@ -71,11 +77,6 @@ module SlopGuard
         versions_result = score_versions(versions, max_points: 5)
         score += versions_result[:score]
         breakdown.concat(versions_result[:breakdown])
-
-        # OpenSSF Scorecard (20 points)
-        scorecard_result = score_scorecard(package_name, metadata)
-        score += scorecard_result[:score]
-        breakdown.concat(scorecard_result[:breakdown])
 
         # Vulnerabilities (deduction)
         vuln_result = check_vulnerabilities(metadata)
@@ -93,48 +94,23 @@ module SlopGuard
         breakdown.concat(deps_result[:breakdown])
 
         # Repository quality (5 points)
-        repo_result = score_repository_quality(package_name, metadata)
+        repo_result = score_repository_quality(metadata)
         score += repo_result[:score]
         breakdown.concat(repo_result[:breakdown])
 
         { score: score, breakdown: breakdown }
       end
 
-      def fetch_dependents_count(package_name)
-        cache_key = "deps:go:#{package_name}"
-        cached = @cache.get(cache_key, ttl: Cache::TRUST_TTL)
-        return cached if cached
-
-        encoded_name = CGI.escape(package_name)
-        url = "#{DEPS_DEV_BASE}/systems/go/packages/#{encoded_name}"
-        
-        data = @http.get(url)
-        if data && data[:versions]
-          latest = data[:versions].last
-          if latest && latest[:versionKey]
-            version = latest[:versionKey][:version]
-            deps_url = "#{url}/versions/#{CGI.escape(version)}:dependents"
-            deps_data = @http.get(deps_url)
-            
-            if deps_data
-              count = (deps_data[:directDependentCount] || 0) + (deps_data[:indirectDependentCount] || 0)
-              @cache.set(cache_key, count, ttl: Cache::TRUST_TTL)
-              return count
-            end
-          end
-        end
-
-        @cache.set(cache_key, 0, ttl: Cache::TRUST_TTL)
-        0
-      end
-
       def extract_github_url(metadata)
-        # Parse from package name for github.com modules
-        package_name = metadata[:packageKey]&.dig(:name)
-        if package_name && package_name.start_with?('github.com/')
-          parts = package_name.sub('github.com/', '').split('/')
+        github_url = metadata[:github_url]
+        return nil unless github_url
+        
+        # Parse STRING "github.com/org/repo" into HASH
+        if github_url.start_with?('github.com/')
+          parts = github_url.sub('github.com/', '').split('/')
           return { org: parts[0], repo: parts[1] } if parts.size >= 2
         end
+        
         nil
       end
 
@@ -155,19 +131,52 @@ module SlopGuard
 
       private
 
-      def fetch_depsdev_metadata(encoded_name)
-        url = "#{DEPS_DEV_BASE}/systems/go/packages/#{encoded_name}"
-        data = @http.get(url)
-        return nil unless data
-        
-        # Enrich with project data (scorecard + stars)
-        if data[:packageKey]
-          project_url = "#{DEPS_DEV_BASE}/projects/#{encoded_name}"
-          project_data = @http.get(project_url)
-          data[:projectData] = project_data if project_data
+      # Returns STRING: "github.com/org/repo" or nil
+      def resolve_github_url(package_name)
+        # Already github.com? Return as STRING
+        if package_name.start_with?('github.com/')
+          parts = package_name.sub('github.com/', '').split('/')
+          return "github.com/#{parts[0]}/#{parts[1]}" if parts.size >= 2
         end
         
-        data
+        # Special case: google.golang.org packages are mirrored on GitHub
+        if package_name.start_with?('google.golang.org/')
+          pkg = package_name.sub('google.golang.org/', '')
+          return "github.com/protocolbuffers/protobuf-go" if pkg.start_with?('protobuf')
+          return "github.com/grpc/grpc-go" if pkg.start_with?('grpc')
+        end
+        
+        # For custom domains, fetch go-get meta tag
+        cache_key = "github_url:#{package_name}"
+        cached = @cache.get(cache_key, ttl: 604800)
+        return cached if cached
+        
+        # Fetch HTML and parse go-import meta tag
+        begin
+          uri = URI("https://#{package_name}?go-get=1")
+          response = Net::HTTP.get_response(uri)
+          
+          if response.code == '200'
+            html = response.body
+            # Parse: <meta name="go-import" content="gorm.io/gorm git https://github.com/go-gorm/gorm">
+            match = html.match(/<meta\s+name="go-import"\s+content="[^"]*\s+git\s+https:\/\/github\.com\/([^"\/]+)\/([^"\/\s]+)/)
+            if match
+              github_url = "github.com/#{match[1]}/#{match[2]}"
+              @cache.set(cache_key, github_url, ttl: 604800)
+              return github_url
+            end
+          end
+        rescue => e
+          # Ignore errors
+        end
+        
+        @cache.set(cache_key, nil, ttl: 604800)
+        nil
+      end
+
+      def fetch_depsdev_metadata(encoded_name)
+        url = "#{DEPS_DEV_BASE}/systems/go/packages/#{encoded_name}"
+        @http.get(url)
       rescue
         nil
       end
@@ -183,7 +192,7 @@ module SlopGuard
 
         version_list = response.split("\n").map(&:strip).reject(&:empty?)
         
-        # Get timestamps for recent versions only (performance)
+        # Get timestamps for recent versions only
         versions = version_list.last(20).map do |version|
           info_url = "#{PROXY_BASE}/#{package_name}/@v/#{version}.info"
           info = @http.get(info_url)
@@ -219,41 +228,26 @@ module SlopGuard
         STDLIB_PREFIXES.any? { |prefix| package_name.start_with?(prefix) }
       end
 
-      def score_dependents(package_name, metadata)
-        count = fetch_dependents_count(package_name)
-        
-        points = case count
-                 when 0...1 then 0
-                 when 1...10 then 5
-                 when 10...100 then 10
-                 when 100...1000 then 15
-                 else 20
-                 end
-
-        {
-          score: points,
-          breakdown: [{ 
-            signal: 'dependents', 
-            points: points, 
-            reason: "#{count} dependent packages" 
-          }]
-        }
-      end
-
+      # Uses STRING github_url from metadata
       def score_github_stars(metadata)
-        stars = 0
+        github_url = metadata[:github_url]  # STRING or nil
+        return { score: 0, breakdown: [] } unless github_url
         
-        # Stars from deps.dev projectData
-        if metadata[:projectData]
-          stars = metadata[:projectData][:starsCount] || 0
-        end
+        # Call projects API with STRING URL
+        encoded = CGI.escape(github_url)
+        project_url = "#{DEPS_DEV_BASE}/projects/#{encoded}"
+        project_data = @http.get(project_url)
+        
+        return { score: 0, breakdown: [] } unless project_data
+        
+        stars = project_data[:starsCount] || 0
 
         points = case stars
-                 when 0...10 then 0
-                 when 10...100 then 3
-                 when 100...500 then 7
-                 when 500...2000 then 11
-                 else 15
+                 when 0...100 then 0
+                 when 100...500 then 5
+                 when 500...2000 then 10
+                 when 2000...10000 then 15
+                 else 20
                  end
 
         {
@@ -266,16 +260,17 @@ module SlopGuard
         }
       end
 
-      def score_scorecard(package_name, metadata)
-        scorecard = metadata[:projectData]&.dig(:scorecard)
-
-        unless scorecard
-          encoded = CGI.escape(package_name)
-          project_url = "#{DEPS_DEV_BASE}/projects/#{encoded}"
-          project_data = @http.get(project_url)
-          scorecard = project_data[:scorecard] if project_data
-        end
-
+      # Uses STRING github_url from metadata
+      def score_scorecard(metadata)
+        github_url = metadata[:github_url]  # STRING or nil
+        return { score: 10, breakdown: [{ signal: 'scorecard', points: 10, reason: 'Scorecard not available' }] } unless github_url
+        
+        # Call projects API with STRING URL
+        encoded = CGI.escape(github_url)
+        project_url = "#{DEPS_DEV_BASE}/projects/#{encoded}"
+        project_data = @http.get(project_url)
+        
+        scorecard = project_data&.dig(:scorecard)
         return { score: 10, breakdown: [{ signal: 'scorecard', points: 10, reason: 'Scorecard not available' }] } unless scorecard
 
         overall_score = scorecard[:overallScore] || 0
@@ -324,10 +319,7 @@ module SlopGuard
       def score_license(metadata)
         licenses = []
         
-        # Try projectData first
-        if metadata[:projectData] && metadata[:projectData][:license]
-          licenses = [metadata[:projectData][:license]]
-        elsif metadata[:versions]
+        if metadata[:versions]
           latest_version = metadata[:versions].last
           licenses = latest_version[:licenses] || [] if latest_version
         end
@@ -384,47 +376,34 @@ module SlopGuard
         }
       end
 
-      def score_repository_quality(package_name, metadata)
-        quality_score = 0
-        
-        if metadata[:projectData]
-          project = metadata[:projectData]
-          
-          quality_score += 1 if project[:description] && !project[:description].empty?
-          quality_score += 1 if project[:homepage] && !project[:homepage].empty?
-          quality_score += 1 if project[:license] && !project[:license].empty?
-          quality_score += 1 if project[:openIssuesCount]
-          quality_score += 1 if project[:forksCount] && project[:forksCount] > 0
-        end
-
-        quality_score = [quality_score, 5].min
+      def score_repository_quality(metadata)
+        github_url = metadata[:github_url]
+        quality_score = github_url ? 5 : 0
 
         {
           score: quality_score,
           breakdown: [{ 
             signal: 'repository_quality', 
             points: quality_score, 
-            reason: 'Repository quality indicators' 
+            reason: github_url ? 'Source repository identified' : 'No source repository' 
           }]
         }
       end
 
       def check_typosquatting(package_name)
-        return nil unless package_name.start_with?('github.com/')
-
-        parts = package_name.sub('github.com/', '').split('/')
-        return nil if parts.size < 2
-
-        repo_name = parts[1]
-
-        suspicious_patterns = [/-go$/, /golang/, /^go-/, /([a-z])\1{2,}/]
+        suspicious_patterns = [
+          /-go$/, 
+          /^golang-/, 
+          /ii+/, 
+          /\d{2,}$/
+        ]
 
         suspicious_patterns.each do |pattern|
-          if repo_name.match?(pattern)
+          if package_name.match?(pattern)
             return {
-              type: 'potential_typosquat',
-              severity: 'HIGH',
-              description: "Repository name matches typosquatting pattern"
+              type: 'typosquat',
+              severity: 'MEDIUM',
+              description: "Suspicious naming pattern: #{pattern.inspect}"
             }
           end
         end
@@ -435,49 +414,35 @@ module SlopGuard
       def check_version_churn(versions)
         return nil if versions.size < 5
 
-        recent_versions = versions.select do |v|
-          next false unless v[:created_at]
-          begin
-            created = Time.parse(v[:created_at])
-            (Time.now - created) < 7 * 86400
-          rescue
-            false
-          end
+        recent = versions.select do |v|
+          v[:created_at] && Time.parse(v[:created_at]) > (Time.now - 7 * 86400)
         end
 
-        if recent_versions.size > 5
-          return {
-            type: 'rapid_version_churn',
+        if recent.size > 5
+          {
+            type: 'rapid_versioning',
             severity: 'MEDIUM',
-            description: "#{recent_versions.size} versions in 7 days"
+            description: "#{recent.size} versions in 7 days"
           }
         end
-
-        nil
       end
 
       def check_repository_age(package_name, versions)
         return nil if versions.empty?
 
-        oldest_version = versions.min_by { |v| v[:created_at] || Time.now.to_s }
-        return nil unless oldest_version[:created_at]
+        valid_versions = versions.select { |v| v[:created_at] }
+        return nil if valid_versions.empty?
 
-        begin
-          first_publish = Time.parse(oldest_version[:created_at])
-          age_days = (Time.now - first_publish) / 86400
+        oldest = valid_versions.min_by { |v| Time.parse(v[:created_at]) }
+        age_days = (Time.now - Time.parse(oldest[:created_at])) / 86400
 
-          if age_days < 90
-            return {
-              type: 'new_package',
-              severity: 'MEDIUM',
-              description: "Package is only #{age_days.round} days old"
-            }
-          end
-        rescue
-          nil
+        if age_days < 90
+          {
+            type: 'new_package',
+            severity: 'LOW',
+            description: "Package is only #{age_days.to_i} days old"
+          }
         end
-
-        nil
       end
     end
   end

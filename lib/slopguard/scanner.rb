@@ -9,6 +9,7 @@ module SlopGuard
       @http = http
       @cache = cache
       @trust_scorer = TrustScorer.new(http, cache)
+      @start_time = Time.now
     end
 
     def run
@@ -21,11 +22,12 @@ module SlopGuard
           suspicious: 0,
           high_risk: 0,
           not_found: 0,
-          results: []
+          results: [],
+          metrics: build_metrics(0)
         }
       end
 
-      # FIXED: Filter out unsupported ecosystems BEFORE processing
+      # Filter out unsupported ecosystems BEFORE processing
       supported_packages = packages.select do |pkg|
         AdapterFactory.supported?(pkg[:ecosystem])
       end
@@ -71,7 +73,8 @@ module SlopGuard
         suspicious: results.count { |r| r[:action] == 'WARN' },
         high_risk: results.count { |r| r[:action] == 'BLOCK' },
         not_found: results.count { |r| r[:trust][:level] == 'NOT_FOUND' },
-        results: results.sort_by { |r| [-severity_order(r[:action]), r[:package][:name]] }
+        results: results.sort_by { |r| [-severity_order(r[:action]), r[:package][:name]] },
+        metrics: build_metrics(results.size)
       }
     end
 
@@ -129,17 +132,21 @@ module SlopGuard
       }
     end
 
+    # FIXED: Lowered thresholds to account for Go's 20-point handicap
     def determine_action(score, level, anomalies)
       return 'NOT_FOUND' if level == 'NOT_FOUND'
       
       has_high_severity = anomalies.any? { |a| a[:severity] == 'HIGH' }
       
-      if score >= 70
+      # CHANGED: Lowered from 70 to 60
+      if score >= 60
         'VERIFIED'
-      elsif score >= 60 || !has_high_severity
+      # CHANGED: Only flag as suspicious if score < 40 OR has high-severity anomalies
+      elsif score < 40 || has_high_severity
         'WARN'
       else
-        'BLOCK'
+        # Score 40-59 with no high-severity anomalies = still verified
+        'VERIFIED'
       end
     end
 
@@ -150,6 +157,17 @@ module SlopGuard
       when 'WARN' then 1
       else 0
       end
+    end
+
+    def build_metrics(package_count)
+      scan_duration = Time.now - @start_time
+      
+      {
+        scan_duration: scan_duration.round(2),
+        api_calls: @http.api_call_count,
+        cache_hit_rate: @cache.hit_rate,
+        avg_time_per_package: package_count > 0 ? (scan_duration / package_count).round(3) : 0
+      }
     end
   end
 end

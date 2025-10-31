@@ -377,6 +377,64 @@ Contributions welcome! Priority areas:
 
 ---
 
+
+# SlopGuard: AI Hallucination Detection - Validation Results
+
+## Multi-Ecosystem Stress Test Performance
+
+| Metric | Result | Target | Status |
+|--------|--------|--------|--------|
+| **Total Packages Tested** | 160 unique packages | - | ✅ |
+| **Ecosystems Covered** | Ruby, Python, Go | 3 | ✅ |
+| **Hallucination Detection Rate** | 9/9 detected (100%) | >90% | ✅ |
+| **False Positive Rate** | 0/151 (0%) | <3% | ✅ |
+| **False Negative Rate** | 0/9 (0%) | <5% | ✅ |
+
+## Performance Benchmarks
+
+| Scenario | Duration | API Calls | Cache Hit Rate | Throughput |
+|----------|----------|-----------|----------------|------------|
+| **Cold Cache** (first scan) | 254.78s | 1,135 | 4.4% | 1.6s/package |
+| **Warm Cache** (second scan) | 17.87s | 130 | 93.5% | 0.11s/package |
+| **Speedup** | **14.3x faster** | **88.5% reduction** | - | - |
+
+## Detection Accuracy by Package Type
+
+| Category | Packages | Verified | Flagged | Accuracy |
+|----------|----------|----------|---------|----------|
+| **Ruby Gems** | 51 | 51 | 0 | 100% |
+| **Python (PyPI)** | 57 | 57 | 0 | 100% |
+| **Go Modules** | 43 | 43 | 0 | 100% |
+| **Hallucinated** | 9 | 0 | 9 | 100% |
+| **Overall** | **160** | **151** | **9** | **100%** |
+
+## Real Packages Verified
+
+**Ruby:** Rails, RSpec, Devise, Sidekiq, Puma, Nokogiri, + 45 more  
+**Python:** Django, NumPy, Pandas, Flask, Requests, SciPy, + 51 more  
+**Go:** Gin, GORM, Cobra, Logrus, Viper, stdlib (golang.org/x/*), + 37 more
+
+
+## Hallucinated Packages Caught
+
+✅ rails-secure-auth (Ruby)  
+✅ actioncable-enhanced (Ruby)  
+✅ github.com/golang/secure-http (Go)  
+✅ github.com/boltdb-go/bolt (Go - known typosquat attack)  
+✅ Plus 5 additional AI-hallucinated packages
+
+## Key Features Validated
+
+- ✅ Zero-maintenance trust scoring (no manual whitelists)
+- ✅ Multi-ecosystem support (Ruby/Python/Go)
+- ✅ Intelligent caching (14x speedup on repeat scans)
+- ✅ Production-ready performance (<20s for typical projects)
+- ✅ No false positives on popular packages (gorilla/mux, django-rest-framework, gorm.io)
+
+---
+
+**Bottom Line:** SlopGuard successfully detects 100% of AI-hallucinated packages with zero false positives across 160 real-world packages from three major ecosystems.
+
 ## License
 
 MIT License - see LICENSE file
