@@ -85,7 +85,7 @@ RSpec.describe SlopGuard::Reporter do
       report = described_class.generate(results, format: :text)
       
       expect(report).to include('FAILED')
-      expect(report).to include('1 high-risk and 1 non-existent')
+      expect(report).to include('Found 1 high-risk and 1 non-existent packages')
     end
   end
   
