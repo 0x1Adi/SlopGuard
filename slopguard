@@ -1,35 +1,37 @@
 #!/usr/bin/env ruby
+# frozen_string_literal: true
+
 require_relative 'lib/slopguard'
 
 if ARGV.empty?
-  puts "Usage: slopguard <sbom.json> [--format json|gitlab] [--output file]"
-  puts ""
-  puts "Options:"
-  puts "  --format text        Human-readable output (default)"
-  puts "  --format json        JSON output with internal structure"
-  puts "  --format gitlab      GitLab security report JSON (v15.0.0)"
-  puts "  --output FILE        Write report to file instead of stdout"
-  puts ""
-  puts "Supported ecosystems:"
-  puts "  - Ruby (RubyGems) - pkg:gem/"
-  puts "  - Python (PyPI) - pkg:pypi/"
-  puts "  - Go (Go Modules) - pkg:golang/"
-  puts ""
-  puts "Exit codes:"
-  puts "  0 = All packages verified or warnings only"
-  puts "  1 = High-risk or non-existent packages found"
-  puts "  2 = Error occurred"
+  puts 'Usage: slopguard <sbom.json> [--format json|gitlab] [--output file]'
+  puts ''
+  puts 'Options:'
+  puts '  --format text        Human-readable output (default)'
+  puts '  --format json        JSON output with internal structure'
+  puts '  --format gitlab      GitLab security report JSON (v15.0.0)'
+  puts '  --output FILE        Write report to file instead of stdout'
+  puts ''
+  puts 'Supported ecosystems:'
+  puts '  - Ruby (RubyGems) - pkg:gem/'
+  puts '  - Python (PyPI) - pkg:pypi/'
+  puts '  - Go (Go Modules) - pkg:golang/'
+  puts ''
+  puts 'Exit codes:'
+  puts '  0 = All packages verified or warnings only'
+  puts '  1 = High-risk or non-existent packages found'
+  puts '  2 = Error occurred'
   exit 1
 end
 
 sbom_path = ARGV[0]
 options = {}
 
-if idx = ARGV.index('--format')
+if (idx = ARGV.index('--format'))
   options[:format] = ARGV[idx + 1]&.to_sym
 end
 
-if idx = ARGV.index('--output')
+if (idx = ARGV.index('--output'))
   options[:output] = ARGV[idx + 1]
 end
 
@@ -37,7 +39,7 @@ begin
   start_time = Time.now
   results = SlopGuard.scan(sbom_path)
   elapsed = Time.now - start_time
-  
+
   # Generate report based on format
   report = case options[:format]
            when :json
@@ -47,25 +49,24 @@ begin
            else
              SlopGuard::Reporter.format_text(results)
            end
-  
+
   if options[:output]
     File.write(options[:output], report)
     puts "Report written to #{options[:output]}"
   else
     puts report
   end
-  
-  unless options[:format] == :json || options[:format] == :gitlab
-    puts ""
+
+  unless [:json, :gitlab].include?(options[:format])
+    puts ''
     puts "Scan completed in #{elapsed.round(2)}s"
   end
-  
+
   # Exit code: 1 if high risk or not found packages, 0 otherwise
-  exit_code = (results[:high_risk] > 0 || results[:not_found] > 0) ? 1 : 0
+  exit_code = results[:high_risk].positive? || results[:not_found].positive? ? 1 : 0
   exit exit_code
-  
-rescue => e
-  STDERR.puts "ERROR: #{e.message}"
-  STDERR.puts e.backtrace.first(5).join("\n") if ENV['DEBUG']
+rescue StandardError => e
+  warn "ERROR: #{e.message}"
+  warn e.backtrace.first(5).join("\n") if ENV['DEBUG']
   exit 2
 end

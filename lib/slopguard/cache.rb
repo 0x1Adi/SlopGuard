@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'digest'
 require 'json'
 require 'fileutils'
@@ -5,153 +7,137 @@ require 'fileutils'
 module SlopGuard
   class Cache
     CACHE_DIR = File.expand_path('~/.slopguard/cache')
-    METADATA_TTL = 86400      # 24 hours
-    TRUST_TTL = 604800        # 7 days
-    
+    METADATA_TTL = 86_400
+    TRUST_TTL = 604_800
+
     attr_reader :cache_hits, :cache_misses
-    
+
     def initialize
       @lock = Mutex.new
-      @cache_hits = 0      # NEW: Track hits
-      @cache_misses = 0    # NEW: Track misses
-      FileUtils.mkdir_p(CACHE_DIR, mode: 0700)
+      @cache_hits = 0
+      @cache_misses = 0
+      FileUtils.mkdir_p(CACHE_DIR, mode: 0o700)
     end
-    
-    # Get cached value if it exists and is fresh
-    # Returns nil if not found or expired
+
     def get(key, ttl: METADATA_TTL)
       path = cache_path(key)
-      
+
       unless File.exist?(path)
-        @cache_misses += 1  # NEW: Track miss
+        @cache_misses += 1
         return nil
       end
-      
+
       begin
         data = JSON.parse(File.read(path), symbolize_names: true)
-        
-        # Check if expired
+
         if fresh?(data[:ts], ttl)
-          @cache_hits += 1  # NEW: Track hit
+          @cache_hits += 1
           data[:val]
         else
-          # Delete expired entry
-          File.delete(path) rescue nil
-          @cache_misses += 1  # NEW: Track miss
+          begin
+            File.delete(path)
+          rescue StandardError
+            nil
+          end
+          @cache_misses += 1
           nil
         end
       rescue JSON::ParserError, Errno::ENOENT
-        # Corrupted or deleted file - return nil
-        @cache_misses += 1  # NEW: Track miss
+        @cache_misses += 1
         nil
       end
     end
-    
-    # Set cached value with timestamp
-    # Thread-safe: uses file locking to prevent race conditions
+
     def set(key, value, ttl: METADATA_TTL)
       path = cache_path(key)
       data = {
         val: value,
-        ts: Time.now.to_i,
-        ttl: ttl
+        ts:  Time.now.to_i,
+        ttl: ttl,
       }
-      
-      # Create directory if needed
+
       FileUtils.mkdir_p(File.dirname(path))
-      
-      # Write atomically to prevent partial reads
-      # Use lock file to prevent cache stampedes
+
       lock_path = "#{path}.lock"
-      
+
       @lock.synchronize do
         File.open(lock_path, File::CREAT | File::EXCL) do |f|
           f.flock(File::LOCK_EX)
-          
-          # Write to temp file then rename (atomic operation)
+
           temp_path = "#{path}.tmp"
           File.write(temp_path, JSON.generate(data))
           File.rename(temp_path, path)
         end
       rescue Errno::EEXIST
-        # Another thread is writing - wait briefly then skip
         sleep(0.01)
       ensure
-        File.delete(lock_path) rescue nil
+        begin
+          File.delete(lock_path)
+        rescue StandardError
+          nil
+        end
       end
     end
-    
-    # Check and set pattern to prevent cache stampedes
-    # If key exists and is fresh, return cached value
-    # Otherwise, execute block and cache result
+
     def fetch(key, ttl: METADATA_TTL)
       cached = get(key, ttl: ttl)
       return cached if cached
-      
-      # Not cached - execute block
+
       result = yield
       set(key, result, ttl: ttl) if result
       result
     end
-    
-    # NEW: Calculate cache hit rate as percentage
+
     def hit_rate
       total = @cache_hits + @cache_misses
-      return 0.0 if total == 0
-      
+      return 0.0 if total.zero?
+
       (@cache_hits.to_f / total * 100).round(1)
     end
-    
-    # Clear entire cache (useful for testing)
+
     def clear
       FileUtils.rm_rf(CACHE_DIR)
-      FileUtils.mkdir_p(CACHE_DIR, mode: 0700)
+      FileUtils.mkdir_p(CACHE_DIR, mode: 0o700)
       @cache_hits = 0
       @cache_misses = 0
     end
-    
-    # Get cache statistics for monitoring
+
     def stats
       total_files = Dir.glob(File.join(CACHE_DIR, '**', '*.cache')).size
       expired = 0
       valid = 0
-      
+
       Dir.glob(File.join(CACHE_DIR, '**', '*.cache')).each do |path|
-        begin
-          data = JSON.parse(File.read(path), symbolize_names: true)
-          if fresh?(data[:ts], data[:ttl] || METADATA_TTL)
-            valid += 1
-          else
-            expired += 1
-          end
-        rescue
+        data = JSON.parse(File.read(path), symbolize_names: true)
+        if fresh?(data[:ts], data[:ttl] || METADATA_TTL)
+          valid += 1
+        else
           expired += 1
         end
+      rescue StandardError
+        expired += 1
       end
-      
+
       {
-        total: total_files,
-        valid: valid,
-        expired: expired,
-        size_mb: (dir_size(CACHE_DIR) / 1024.0 / 1024.0).round(2),
-        hit_rate: hit_rate  # NEW: Include hit rate in stats
+        total:    total_files,
+        valid:    valid,
+        expired:  expired,
+        size_mb:  (dir_size(CACHE_DIR) / 1024.0 / 1024.0).round(2),
+        hit_rate: hit_rate,
       }
     end
-    
+
     private
-    
+
     def fresh?(timestamp, ttl)
       Time.now.to_i - timestamp < ttl
     end
-    
+
     def cache_path(key)
-      # Use SHA256 for deterministic, collision-resistant hashing
       hash = Digest::SHA256.hexdigest(key)
-      # Split into subdirectories to avoid too many files in one dir
-      # Format: ~/.slopguard/cache/ab/cd/abcd1234...cache
       File.join(CACHE_DIR, hash[0..1], hash[2..3], "#{hash}.cache")
     end
-    
+
     def dir_size(dir)
       size = 0
       Dir.glob(File.join(dir, '**', '*')).each do |file|

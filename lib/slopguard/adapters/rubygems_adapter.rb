@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require_relative '../ecosystem_adapter'
 
 module SlopGuard
@@ -12,27 +14,25 @@ module SlopGuard
         return nil unless metadata
 
         versions = fetch_versions(package_name)
-        
+
         result = { metadata: metadata, versions: versions }
         @cache.set(cache_key, result, ttl: Cache::METADATA_TTL)
         result
       end
 
-      def calculate_trust(package_name, metadata, versions)
+      def calculate_trust(_package_name, metadata, versions)
         score = 0
         breakdown = []
 
-        # Downloads (max 30 points)
         downloads_result = score_downloads(
           metadata[:downloads].to_i,
           critical: 100_000_000,
-          high: 10_000_000,
-          medium: 1_000_000
+          high:     10_000_000,
+          medium:   1_000_000
         )
         score += downloads_result[:score]
         breakdown.concat(downloads_result[:breakdown])
 
-        # Age and version history (max 25 points)
         age_result = score_age(versions, max_points: 15)
         score += age_result[:score]
         breakdown.concat(age_result[:breakdown])
@@ -47,7 +47,7 @@ module SlopGuard
       def fetch_dependents_count(package_name)
         cache_key = "deps:ruby:#{package_name}"
         deps = @cache.get(cache_key, ttl: Cache::TRUST_TTL)
-        
+
         unless deps
           data = @http.get("https://rubygems.org/api/v1/gems/#{package_name}/reverse_dependencies.json")
           deps = data || []
@@ -58,14 +58,14 @@ module SlopGuard
       end
 
       def extract_github_url(metadata)
-        url = metadata.dig(:metadata, :source_code_uri) || 
+        url = metadata.dig(:metadata, :source_code_uri) ||
               metadata[:source_code_uri] ||
               metadata.dig(:metadata, :homepage_uri) ||
               metadata[:homepage_uri]
-        
+
         return nil unless url&.include?('github.com')
 
-        match = url.match(%r{github\.com/([^/]+)/([^/\.]+)})
+        match = url.match(%r{github\.com/([^/]+)/([^/.]+)})
         return nil unless match
 
         { org: match[1], repo: match[2] }
@@ -74,36 +74,38 @@ module SlopGuard
       def detect_anomalies(package_name, metadata, versions)
         anomalies = []
 
-        # Check for namespace squatting
         if package_name.include?('-') || package_name.include?('_')
           base = package_name.split(/[-_]/).first
           base_downloads = fetch_base_package_downloads(base)
-          
+
           if base_downloads && base_downloads > 10_000_000
             pkg_downloads = metadata[:downloads].to_i
             if pkg_downloads < base_downloads * 0.01
               anomalies << {
-                type: 'namespace_squat',
-                severity: 'HIGH',
-                description: "Uses '#{base}' namespace (#{format_count(base_downloads)} downloads) but only #{format_count(pkg_downloads)} downloads"
+                type:        'namespace_squat',
+                severity:    'HIGH',
+                description: "Uses '#{base}' namespace (#{format_count(base_downloads)} downloads) but only #{format_count(pkg_downloads)} downloads",
               }
             end
           end
         end
 
-        # Check for download inflation
-        recent_version = versions.max_by { |v| Time.parse(v[:created_at]) rescue Time.at(0) }
+        recent_version = versions.max_by do |v|
+          Time.parse(v[:created_at])
+        rescue StandardError
+          Time.at(0)
+        end
         if recent_version
           version_downloads = recent_version[:downloads_count].to_i
           total_downloads = metadata[:downloads].to_i
-          
-          if version_downloads > 0 && total_downloads > 0
+
+          if version_downloads.positive? && total_downloads.positive?
             ratio = version_downloads.to_f / total_downloads
             if ratio > 0.95 && total_downloads > 100_000
               anomalies << {
-                type: 'download_inflation',
-                severity: 'MEDIUM',
-                description: "Single version accounts for #{(ratio * 100).round}% of downloads (suspicious)"
+                type:        'download_inflation',
+                severity:    'MEDIUM',
+                description: "Single version accounts for #{(ratio * 100).round}% of downloads (suspicious)",
               }
             end
           end
@@ -117,7 +119,7 @@ module SlopGuard
       def fetch_versions(package_name)
         cache_key = "versions:ruby:#{package_name}"
         versions = @cache.get(cache_key, ttl: Cache::TRUST_TTL)
-        
+
         unless versions
           data = @http.get("https://rubygems.org/api/v1/versions/#{package_name}.json")
           versions = data || []

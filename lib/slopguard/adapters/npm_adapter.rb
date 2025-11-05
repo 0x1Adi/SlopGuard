@@ -1,10 +1,11 @@
+# frozen_string_literal: true
+
 require_relative '../ecosystem_adapter'
 
 module SlopGuard
   module Adapters
     class NpmAdapter < EcosystemAdapter
       def fetch_metadata(package_name)
-        # Fetch from npm registry
         cache_key = "meta:npm:#{package_name}"
         cached = @cache.get(cache_key, ttl: Cache::METADATA_TTL)
         return cached if cached
@@ -14,32 +15,29 @@ module SlopGuard
 
         result = {
           metadata: extract_metadata(data),
-          versions: parse_versions(data[:versions])
+          versions: parse_versions(data[:versions]),
         }
-        
+
         @cache.set(cache_key, result, ttl: Cache::METADATA_TTL)
         result
       end
 
-      def calculate_trust(package_name, metadata, versions)
+      def calculate_trust(package_name, _metadata, versions)
         score = 0
         breakdown = []
 
-        # npm-specific signals
         downloads = fetch_weekly_downloads(package_name)
         if downloads
-          # npm has weekly download stats
+
           annual_downloads = downloads * 52
-          downloads_result = score_downloads(annual_downloads, 
-            critical: 50_000_000,
-            high: 5_000_000, 
-            medium: 500_000
-          )
+          downloads_result = score_downloads(annual_downloads,
+                                             critical: 50_000_000,
+                                             high:     5_000_000,
+                                             medium:   500_000)
           score += downloads_result[:score]
           breakdown.concat(downloads_result[:breakdown])
         end
 
-        # Age and versions (shared logic)
         age_result = score_age(versions, max_points: 15)
         score += age_result[:score]
         breakdown.concat(age_result[:breakdown])
@@ -52,7 +50,6 @@ module SlopGuard
       end
 
       def fetch_dependents_count(package_name)
-        # npm has a dependents API
         data = @http.get("https://registry.npmjs.org/-/v1/search?text=#{package_name}&size=0")
         data ? data[:total] : nil
       end
@@ -61,19 +58,14 @@ module SlopGuard
         repo_url = metadata.dig(:repository, :url)
         return nil unless repo_url&.include?('github.com')
 
-        match = repo_url.match(%r{github\.com[:/]([^/]+)/([^/\.]+)})
+        match = repo_url.match(%r{github\.com[:/]([^/]+)/([^/.]+)})
         return nil unless match
 
         { org: match[1], repo: match[2] }
       end
 
-      def detect_anomalies(package_name, metadata, versions)
-        anomalies = []
-        
-        # npm-specific anomaly detection
-        # e.g., check for typosquatting against popular packages
-        
-        anomalies
+      def detect_anomalies(_package_name, _metadata, _versions)
+        []
       end
 
       private
@@ -86,9 +78,9 @@ module SlopGuard
       def parse_versions(versions_data)
         versions_data.map do |version, data|
           {
-            number: version.to_s,
+            number:     version.to_s,
             created_at: data[:time] || Time.now.iso8601,
-            deprecated: data[:deprecated] || false
+            deprecated: data[:deprecated] || false,
           }
         end.reject { |v| v[:deprecated] }
       end
