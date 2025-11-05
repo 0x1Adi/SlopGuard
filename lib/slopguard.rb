@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'json'
 require 'net/http'
 require 'fileutils'
@@ -19,16 +21,16 @@ require_relative 'slopguard/reporter'
 module SlopGuard
   @http_client = nil
   @cache = nil
-  
+
   def self.http_client
     @http_client ||= HttpClient.new
   end
-  
+
   def self.cache
     @cache ||= Cache.new
   end
-  
-  def self.scan(sbom_path, options = {})
+
+  def self.scan(sbom_path, _options = {})
     Scanner.new(sbom_path, http: http_client, cache: cache).run
   end
 end

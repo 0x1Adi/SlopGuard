@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'webmock/rspec'
 
 RSpec.configure do |config|
@@ -10,13 +12,11 @@ RSpec.configure do |config|
   end
 
   config.shared_context_metadata_behavior = :apply_to_host_groups
-  
-  # Disable real HTTP requests during tests
+
   WebMock.disable_net_connect!(allow_localhost: true)
-  
-  # Clean up temp files after all tests
+
   config.after(:suite) do
     cache_dir = File.expand_path('~/.slopguard/cache')
-    FileUtils.rm_rf(cache_dir) if File.exist?(cache_dir)
+    FileUtils.rm_rf(cache_dir)
   end
 end

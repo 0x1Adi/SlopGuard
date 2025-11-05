@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module SlopGuard
   class TrustScorer
     def initialize(http, cache)
@@ -8,32 +10,33 @@ module SlopGuard
     def score(package)
       ecosystem = package[:ecosystem]
       adapter = AdapterFactory.create(ecosystem, @http, @cache)
-      
-      # Fetch metadata using ecosystem adapter
+
       t1 = Time.now
       data = adapter.fetch_metadata(package[:name])
       timings = { fetch_metadata: ((Time.now - t1) * 1000).round(2) }
-      puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - fetch_metadata: #{timings[:fetch_metadata]}ms" if ENV['PROFILE']
-      
+      if ENV['PROFILE']
+        puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - fetch_metadata: #{timings[:fetch_metadata]}ms"
+      end
+
       return not_found_result(package[:name]) unless data
-      
+
       metadata = data[:metadata]
       versions = data[:versions]
-      
+
       score = 0
       breakdown = []
 
-      # Stage 1: Basic trust (downloads + age + versions)
       t2 = Time.now
       basic = adapter.calculate_trust(package[:name], metadata, versions)
       score += basic[:score]
       breakdown.concat(basic[:breakdown])
       timings[:calculate_trust] = ((Time.now - t2) * 1000).round(2)
-      puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - calculate_trust: #{timings[:calculate_trust]}ms (score: #{score})" if ENV['PROFILE']
-      
-      return finalize(score, breakdown, 1) if score >= 70  # Early exit if high trust from basic signals
+      if ENV['PROFILE']
+        puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - calculate_trust: #{timings[:calculate_trust]}ms (score: #{score})"
+      end
 
-      # Stage 2: Dependents (if available)
+      return finalize(score, breakdown, 1) if score >= 70
+
       t3 = Time.now
       deps_count = adapter.fetch_dependents_count(package[:name])
       if deps_count
@@ -42,17 +45,20 @@ module SlopGuard
         breakdown.concat(deps_result[:breakdown])
       end
       timings[:dependents] = ((Time.now - t3) * 1000).round(2)
-      puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - dependents: #{timings[:dependents]}ms (score: #{score})" if ENV['PROFILE']
-      
+      if ENV['PROFILE']
+        puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - dependents: #{timings[:dependents]}ms (score: #{score})"
+      end
+
       return finalize(score, breakdown, 2) if score >= 70
 
-      # Stage 3: GitHub signals
       t4 = Time.now
       gh = adapter.score_github(metadata)
       score += gh[:score]
       breakdown.concat(gh[:breakdown])
       timings[:github] = ((Time.now - t4) * 1000).round(2)
-      puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - github: #{timings[:github]}ms (score: #{score})" if ENV['PROFILE']
+      if ENV['PROFILE']
+        puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - github: #{timings[:github]}ms (score: #{score})"
+      end
 
       finalize(score, breakdown, 3)
     end
@@ -74,16 +80,16 @@ module SlopGuard
         reason = "Used by #{count} packages"
       end
 
-      breakdown = score > 0 ? [{ signal: 'dependents', points: score, reason: reason }] : []
+      breakdown = score.positive? ? [{ signal: 'dependents', points: score, reason: reason }] : []
       { score: score, breakdown: breakdown }
     end
 
-    def not_found_result(package_name)
+    def not_found_result(_package_name)
       {
-        score: 0,
-        level: 'NOT_FOUND',
+        score:     0,
+        level:     'NOT_FOUND',
         breakdown: [{ signal: 'existence', points: 0, reason: 'Package does not exist in registry' }],
-        stage: 0
+        stage:     0,
       }
     end
 
@@ -96,7 +102,7 @@ module SlopGuard
               when 40..59 then 'LOW'
               else 'UNTRUSTED'
               end
-      
+
       { score: score, level: level, breakdown: breakdown, stage: stage }
     end
   end
