@@ -134,11 +134,12 @@ module SlopGuard
     def refill_tokens
       now = Time.now
       elapsed = now - @last_refill
-      new_tokens = (elapsed * RATE_LIMIT).floor
+      
+      tokens_to_add = (elapsed * RATE_LIMIT).floor
 
-      if new_tokens.positive?
-        @tokens = [@tokens + new_tokens, BURST_SIZE].min
-        @last_refill = now
+      if tokens_to_add.positive?
+        @tokens = [@tokens + tokens_to_add, BURST_SIZE].min
+        @last_refill += (tokens_to_add.to_f / RATE_LIMIT)
       end
     end
   end

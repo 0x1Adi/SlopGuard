@@ -193,19 +193,39 @@ module SlopGuard
         []
       end
 
-      def make_plain_text_request(uri)
-        http = Net::HTTP.new(uri.host, uri.port)
-        http.use_ssl = true
-        http.read_timeout = 10
-        http.open_timeout = 5
+      def make_plain_text_request(uri, retries: 3)
+        attempt = 0
 
-        request = Net::HTTP::Get.new(uri)
-        request['User-Agent'] = 'SlopGuard/1.0'
+        begin
+          attempt += 1
 
-        response = http.request(request)
-        response.is_a?(Net::HTTPSuccess) ? response.body : nil
-      rescue StandardError
-        nil
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.use_ssl = true
+          http.read_timeout = 10
+          http.open_timeout = 5
+
+          request = Net::HTTP::Get.new(uri)
+          request['User-Agent'] = 'SlopGuard/1.0'
+
+          response = http.request(request)
+
+          case response.code.to_i
+          when 200
+            response.body
+          when 404
+            nil
+          when 500..599
+            raise Net::HTTPClientException.new("Server error: #{response.code}", response)
+          end
+        rescue Net::ReadTimeout, Net::OpenTimeout, Net::HTTPClientException, SocketError, Errno::ECONNREFUSED => e
+          if attempt < retries
+            sleep(2**attempt)
+            retry
+          else
+            warn "[HTTP] Go proxy request failed after #{retries} attempts: #{e.message}" if ENV['DEBUG']
+            nil
+          end
+        end
       end
 
       def standard_library?(package_name)

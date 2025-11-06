@@ -33,8 +33,19 @@ module SlopGuard
         AdapterFactory.supported?(pkg[:ecosystem])
       end
 
-      skipped = packages.size - supported_packages.size
-      puts "[INFO] Skipped #{skipped} packages from unsupported ecosystems" if skipped.positive? && ENV['DEBUG']
+      skipped_packages = packages - supported_packages
+
+      if skipped_packages.any?
+        warn "\n⚠️  WARNING: Skipped #{skipped_packages.size} packages from unsupported ecosystems:"
+
+        by_ecosystem = skipped_packages.group_by { |p| p[:ecosystem] }
+        by_ecosystem.each do |ecosystem, pkgs|
+          warn "  - #{ecosystem}: #{pkgs.size} packages"
+        end
+
+        warn "  Supported: #{AdapterFactory.supported_ecosystems.join(', ')}"
+        warn "  See ADDING_ECOSYSTEMS.md to add support\n"
+      end
 
       pool = Concurrent::FixedThreadPool.new(THREAD_POOL_SIZE)
       futures = supported_packages.map do |pkg|
@@ -55,9 +66,18 @@ module SlopGuard
         end
       end
 
-      results = futures.map(&:value).compact
+      results = futures.map do |future|
+        future.value(120) # 2 minute timeout per package
+      rescue Concurrent::TimeoutError
+        warn '[ERROR] Package scan timed out'
+        nil
+      end.compact
+
       pool.shutdown
-      pool.wait_for_termination
+      unless pool.wait_for_termination(300) # 5 minute total timeout
+        pool.kill
+        raise 'Scanner thread pool did not terminate cleanly'
+      end
 
       {
         total:      results.size,
