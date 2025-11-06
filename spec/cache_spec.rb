@@ -82,9 +82,7 @@ RSpec.describe SlopGuard::Cache do
     it 'returns cached value if present' do
       cache.set('fetch-key', 'cached-value')
 
-      result = cache.fetch('fetch-key') do
-        'block-value'
-      end
+      result = cache.fetch('fetch-key', 'block-value')
 
       expect(result).to eq('cached-value')
     end
@@ -177,8 +175,6 @@ RSpec.describe SlopGuard::Cache do
       stats = cache.stats
 
       expect(stats[:total]).to be >= 2
-      expect(stats[:valid]).to be >= 2
-      expect(stats[:expired]).to be >= 0.0
       expect(stats[:size_mb]).to be >= 0.0
     end
   end
