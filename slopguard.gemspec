@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name          = 'slopguard'
-  spec.version       = '0.2.0'
+  spec.version       = '0.3.0'
   spec.authors       = ['Aditya Tiwari']
   spec.email         = ['adityatiwari01933@gmail.com']
 
@@ -19,8 +19,5 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency 'concurrent-ruby', '~> 1.2'
 
-  spec.add_development_dependency 'rspec', '~> 3.12'
-  spec.add_development_dependency 'vcr', '~> 6.1'
-  spec.add_development_dependency 'webmock', '~> 3.18'
   spec.metadata['rubygems_mfa_required'] = 'true'
 end
