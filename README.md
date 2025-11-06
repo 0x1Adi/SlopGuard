@@ -443,6 +443,6 @@ MIT License - see LICENSE file
 
 ## Author
 
-Built by Aditya Tiwari - Security Researcher
+Built by Aditya Tiwari - Security Researcher - https://www.linkedin.com/in/aditya01933
 
 **Found this useful?** Star the repo and share with your team!

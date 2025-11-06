@@ -2,9 +2,12 @@
 
 module SlopGuard
   class AnomalyDetector
+    POPULAR_GEMS_FILE = File.expand_path('../../data/popular_gems.yml', __dir__)
+    
     def initialize(http, cache)
       @http = http
       @cache = cache
+      @popular_gems = load_popular_gems
     end
 
     def detect(package, metadata, _trust)
@@ -206,32 +209,8 @@ module SlopGuard
     end
 
     def check_typosquat(package, meta)
-      @popular_mutex ||= Mutex.new
-
-      popular = @popular_mutex.synchronize do
-        cached = @cache.get('popular:ruby', ttl: 604_800)
-        return cached if cached
-
-        puts "[PROFILE-TYPO] #{package[:name]} - Fetching popular gems (cache miss)..." if ENV['PROFILE']
-        t_start = Time.now
-
-        known_popular = ['rails', 'rake', 'bundler']
-
-        result = known_popular.map do |name|
-          data = @http.get("https://rubygems.org/api/v1/gems/#{name}.json")
-          next unless data
-
-          { name: data[:name], downloads: data[:downloads] }
-        end.compact
-
-        t_elapsed = ((Time.now - t_start) * 1000).round(2)
-        puts "[PROFILE-TYPO] #{package[:name]} - Fetched #{result.size} gems in #{t_elapsed}ms" if ENV['PROFILE']
-
-        @cache.set('popular:ruby', result, ttl: 604_800)
-        result
-      end
-
-      return nil unless popular&.any?
+      popular = @popular_gems[:ruby] || []
+      return nil if popular.empty?
 
       name = package[:name]
       current_dl = meta[:downloads].to_i
@@ -243,18 +222,28 @@ module SlopGuard
         adoption_ratio = current_dl.to_f / target[:downloads]
         if adoption_ratio < 0.001
           return {
-            type:           'typosquat',
-            severity:       'HIGH',
-            penalty:        -30,
-            confidence:     90,
-            evidence:       "1-char from '#{target[:name]}' (#{target[:downloads]} downloads) but only #{current_dl} downloads",
+            type: 'typosquat',
+            severity: 'HIGH',
+            penalty: -30,
+            confidence: 90,
+            evidence: "1-char from '#{target[:name]}' (#{format_downloads(target[:downloads])}) but only #{format_downloads(current_dl)}",
             target_package: target[:name],
-            edit_distance:  dist,
+            edit_distance: dist,
             adoption_ratio: adoption_ratio,
           }
         end
       end
       nil
+    end
+
+    def format_downloads(count)
+      if count >= 1_000_000
+        "#{(count / 1_000_000.0).round(1)}M"
+      elsif count >= 1_000
+        "#{(count / 1_000.0).round(1)}K"
+      else
+        count.to_s
+      end
     end
 
     def check_homoglyph(name)
