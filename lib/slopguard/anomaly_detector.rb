@@ -32,9 +32,7 @@ module SlopGuard
         elapsed = ((Time.now - start) * 1000).round(2)
         timings[method_name] = elapsed
 
-        if ENV['PROFILE']
-          puts "[PROFILE-ANOMALY] [#{Thread.current.object_id}] #{package[:name]} - #{method_name}: #{elapsed}ms"
-        end
+        puts "[PROFILE-ANOMALY] [#{Thread.current.object_id}] #{package[:name]} - #{method_name}: #{elapsed}ms" if ENV['PROFILE']
 
         all_anomalies << result if result
       end
