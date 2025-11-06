@@ -2,6 +2,7 @@
 
 source 'https://rubygems.org'
 
+gem 'activesupport', '~> 8.0'
 gem 'concurrent-ruby', '~> 1.2'
 
 group :test, :development do
