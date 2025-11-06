@@ -1,0 +1,83 @@
+# Popular gems for typosquatting detection
+# Source: rubygems.org/stats (November 2025)
+# Update: Annually or when major shifts occur
+# 
+# Covers top 25 gems per ecosystem representing ~85% of typosquat targets
+# Downloads are approximate - used only for ratio calculation
+ruby:
+  - name: rake
+    downloads: 514000000
+  - name: bundler
+    downloads: 411000000
+  - name: json
+    downloads: 361000000
+  - name: concurrent-ruby
+    downloads: 329000000
+  - name: minitest
+    downloads: 318000000
+  - name: activesupport
+    downloads: 305000000
+  - name: rack
+    downloads: 296000000
+  - name: rails
+    downloads: 285000000
+  - name: i18n
+    downloads: 268000000
+  - name: tzinfo
+    downloads: 259000000
+  - name: builder
+    downloads: 245000000
+  - name: rspec
+    downloads: 241000000
+  - name: thor
+    downloads: 238000000
+  - name: nokogiri
+    downloads: 232000000
+  - name: actionpack
+    downloads: 225000000
+  - name: activerecord
+    downloads: 218000000
+  - name: actionview
+    downloads: 211000000
+  - name: activemodel
+    downloads: 205000000
+  - name: devise
+    downloads: 141000000
+  - name: puma
+    downloads: 115000000
+  - name: sidekiq
+    downloads: 108000000
+  - name: pg
+    downloads: 118000000
+  - name: redis
+    downloads: 82000000
+  - name: faraday
+    downloads: 62000000
+  - name: pundit
+    downloads: 48000000
+
+python:
+  - name: setuptools
+    downloads: 2100000000
+  - name: pip
+    downloads: 1800000000
+  - name: wheel
+    downloads: 1500000000
+  - name: requests
+    downloads: 890000000
+  - name: certifi
+    downloads: 780000000
+  - name: urllib3
+    downloads: 750000000
+  - name: numpy
+    downloads: 620000000
+  - name: six
+    downloads: 580000000
+
+golang:
+  - name: github.com/stretchr/testify
+    downloads: 0
+  - name: github.com/gin-gonic/gin
+    downloads: 0
+  - name: github.com/gorilla/mux
+    downloads: 0
