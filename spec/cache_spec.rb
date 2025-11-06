@@ -82,7 +82,9 @@ RSpec.describe SlopGuard::Cache do
     it 'returns cached value if present' do
       cache.set('fetch-key', 'cached-value')
 
-      result = cache.fetch('fetch-key', 'block-value')
+      result = cache.fetch('fetch-key') do
+        'block-value'
+      end
 
       expect(result).to eq('cached-value')
     end

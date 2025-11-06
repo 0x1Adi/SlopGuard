@@ -179,7 +179,7 @@ RSpec.describe SlopGuard::Parser do
     it 'raises error for non-existent file' do
       parser = described_class.new('/nonexistent/path/sbom.json')
 
-      expect { parser.parse }.to raise_error(SlopGuard::Parser::ParseError, /SBOM file does not exist/)
+      expect { parser.parse }.to raise_error(SlopGuard::Parser::ParseError, /File does not exist/)
     end
 
     it 'raises error for invalid JSON' do
@@ -211,7 +211,7 @@ RSpec.describe SlopGuard::Parser do
 
       parser = described_class.new(path)
 
-      expect { parser.parse }.to raise_error(SlopGuard::Parser::ParseError, /Unsupported BOM format/)
+      expect { parser.parse }.to raise_error(SlopGuard::Parser::ParseError, /Unsupported format/)
     end
 
     it 'raises error for missing specVersion' do

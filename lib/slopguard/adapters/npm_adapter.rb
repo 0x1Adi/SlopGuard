@@ -76,13 +76,15 @@ module SlopGuard
       end
 
       def parse_versions(versions_data)
-        versions_data.map do |version, data|
+        versions = versions_data.map do |version, data|
           {
             number:     version.to_s,
             created_at: data[:time] || Time.now.iso8601,
             deprecated: data[:deprecated] || false,
           }
-        end.reject { |v| v[:deprecated] }
+        end
+
+        versions.reject { |v| v[:deprecated] }
       end
 
       def fetch_weekly_downloads(package_name)

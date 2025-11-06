@@ -4,6 +4,7 @@ source 'https://rubygems.org'
 
 gem 'activesupport', '~> 8.0'
 gem 'concurrent-ruby', '~> 1.2'
+gem 'packageurl-ruby', '~> 0.1'
 
 group :test, :development do
   gem 'pry'

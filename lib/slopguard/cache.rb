@@ -44,10 +44,17 @@ module SlopGuard
     end
 
     def fetch(key, ttl: METADATA_TTL)
-      @store.fetch(key, expires_in: ttl) do
+      value = @store.read(key)
+
+      if value
+        @cache_hits += 1
+        value
+      else
         @cache_misses += 1
-        yield
-      end.tap { @cache_hits += 1 }
+        result = yield
+        @store.write(key, result, expires_in: ttl) if result
+        result
+      end
     end
 
     def clear

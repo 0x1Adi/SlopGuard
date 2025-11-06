@@ -14,9 +14,7 @@ module SlopGuard
       t1 = Time.now
       data = adapter.fetch_metadata(package[:name])
       timings = { fetch_metadata: ((Time.now - t1) * 1000).round(2) }
-      if ENV['PROFILE']
-        puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - fetch_metadata: #{timings[:fetch_metadata]}ms"
-      end
+      puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - fetch_metadata: #{timings[:fetch_metadata]}ms" if ENV['PROFILE']
 
       return not_found_result(package[:name]) unless data
 
@@ -31,9 +29,7 @@ module SlopGuard
       score += basic[:score]
       breakdown.concat(basic[:breakdown])
       timings[:calculate_trust] = ((Time.now - t2) * 1000).round(2)
-      if ENV['PROFILE']
-        puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - calculate_trust: #{timings[:calculate_trust]}ms (score: #{score})"
-      end
+      puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - calculate_trust: #{timings[:calculate_trust]}ms (score: #{score})" if ENV['PROFILE']
 
       return finalize(score, breakdown, 1) if score >= 70
 
@@ -45,9 +41,7 @@ module SlopGuard
         breakdown.concat(deps_result[:breakdown])
       end
       timings[:dependents] = ((Time.now - t3) * 1000).round(2)
-      if ENV['PROFILE']
-        puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - dependents: #{timings[:dependents]}ms (score: #{score})"
-      end
+      puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - dependents: #{timings[:dependents]}ms (score: #{score})" if ENV['PROFILE']
 
       return finalize(score, breakdown, 2) if score >= 70
 
@@ -56,9 +50,7 @@ module SlopGuard
       score += gh[:score]
       breakdown.concat(gh[:breakdown])
       timings[:github] = ((Time.now - t4) * 1000).round(2)
-      if ENV['PROFILE']
-        puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - github: #{timings[:github]}ms (score: #{score})"
-      end
+      puts "[PROFILE-TRUST] [#{Thread.current.object_id}] #{package[:name]} - github: #{timings[:github]}ms (score: #{score})" if ENV['PROFILE']
 
       finalize(score, breakdown, 3)
     end
@@ -94,7 +86,7 @@ module SlopGuard
     end
 
     def finalize(score, breakdown, stage)
-      score = [[score, 0].max, 100].min
+      score = score.clamp(0, 100)
       level = case score
               when 95..100 then 'CRITICAL'
               when 80..94 then 'HIGH'
