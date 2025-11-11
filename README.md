@@ -50,7 +50,7 @@ See [ADDING_ECOSYSTEMS.md](ADDING_ECOSYSTEMS.md) for how to add new package regi
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/SlopGuard.git
+git clone https://github.com/aditya01933/SlopGuard.git
 cd SlopGuard
 bundle install
 chmod +x slopguard
@@ -94,7 +94,7 @@ slopguard_scan:
   stage: dependencies
   image: ruby:3.1
   before_script:
-    - git clone https://github.com/yourusername/SlopGuard.git
+    - git clone https://github.com/aditya01933/SlopGuard.git
     - cd SlopGuard && bundle install && cd ..
   script:
     - SlopGuard/slopguard sbom.json --format gitlab --output gl-dependency-scanning-report.json
